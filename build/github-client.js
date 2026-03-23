@@ -1,19 +1,44 @@
 import { Octokit } from "@octokit/rest";
-let octokitInstance = null;
+import { AsyncLocalStorage } from "node:async_hooks";
+export const requestContext = new AsyncLocalStorage();
+// Cache Octokit instances by token to avoid re-creating per call within same request
+const octokitCache = new Map();
 export function getOctokit() {
-    if (octokitInstance)
-        return octokitInstance;
+    // 1. Try AsyncLocalStorage context (Lambda per-request token)
+    const ctx = requestContext.getStore();
+    if (ctx?.token) {
+        let octokit = octokitCache.get(ctx.token);
+        if (!octokit) {
+            octokit = new Octokit({
+                auth: ctx.token,
+                userAgent: "github-org-monitor-mcp/1.0.0",
+            });
+            octokitCache.set(ctx.token, octokit);
+            // Evict old entries if cache grows too large
+            if (octokitCache.size > 100) {
+                const firstKey = octokitCache.keys().next().value;
+                if (firstKey)
+                    octokitCache.delete(firstKey);
+            }
+        }
+        return octokit;
+    }
+    // 2. Fallback to GITHUB_TOKEN env var (stdio/local HTTP mode)
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
         throw new Error("GITHUB_TOKEN environment variable is required. " +
             "Create a Personal Access Token at https://github.com/settings/tokens " +
             "with 'repo', 'read:org' scopes.");
     }
-    octokitInstance = new Octokit({
-        auth: token,
-        userAgent: "github-org-monitor-mcp/1.0.0",
-    });
-    return octokitInstance;
+    let octokit = octokitCache.get(token);
+    if (!octokit) {
+        octokit = new Octokit({
+            auth: token,
+            userAgent: "github-org-monitor-mcp/1.0.0",
+        });
+        octokitCache.set(token, octokit);
+    }
+    return octokit;
 }
 /**
  * Fetch contributor stats with retry logic for 202 responses.

@@ -1,4 +1,9 @@
 import { Octokit } from "@octokit/rest";
+import { AsyncLocalStorage } from "node:async_hooks";
+interface RequestContext {
+    token: string;
+}
+export declare const requestContext: AsyncLocalStorage<RequestContext>;
 export declare function getOctokit(): Octokit;
 /**
  * Fetch contributor stats with retry logic for 202 responses.
@@ -32,3 +37,4 @@ export interface OrgRepo {
     updated_at: string | null;
     stargazers_count: number;
 }
+export {};
