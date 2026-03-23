@@ -1,4 +1,7 @@
 node_modules/
+.mcp.json
+.DS_Store
+.claude/settings.local.json
 
 # SAM
 .aws-sam/
