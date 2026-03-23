@@ -1,0 +1,126 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: GitHub Org Monitor MCP Server
+
+Parameters:
+  GitHubAppClientId:
+    Type: String
+    Description: GitHub App Client ID
+  GitHubAppClientSecret:
+    Type: String
+    Description: GitHub App Client Secret
+    NoEcho: true
+  JwtSecret:
+    Type: String
+    Description: JWT signing secret (min 32 chars)
+    NoEcho: true
+  AllowedOrg:
+    Type: String
+    Default: fastfive-dev
+    Description: GitHub organization to restrict access to
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    MemorySize: 256
+    Timeout: 60
+
+Resources:
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - mcp-session-id
+
+  McpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: build/lambda.handler
+      CodeUri: ../
+      Environment:
+        Variables:
+          GITHUB_APP_CLIENT_ID: !Ref GitHubAppClientId
+          GITHUB_APP_CLIENT_SECRET: !Ref GitHubAppClientSecret
+          JWT_SECRET: !Ref JwtSecret
+          ALLOWED_ORG: !Ref AllowedOrg
+          TOKEN_TABLE: !Ref TokenTable
+          BASE_URL: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TokenTable
+      Events:
+        Metadata:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /.well-known/oauth-authorization-server
+            Method: GET
+        Authorize:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /authorize
+            Method: GET
+        Callback:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /callback
+            Method: GET
+        Token:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /token
+            Method: POST
+        Mcp:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /mcp
+            Method: POST
+        Health:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /health
+            Method: GET
+        Options:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /{proxy+}
+            Method: OPTIONS
+
+  TokenTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: mcp-github-tokens
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway URL
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  McpEndpoint:
+    Description: MCP Server endpoint for claude.ai connector
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod/mcp"
