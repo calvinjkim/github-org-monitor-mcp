@@ -44,11 +44,20 @@ Lambda (단일 함수)
     │
     ▼
 DynamoDB (mcp-github-tokens)
-    ├── pk: github_user_id (String, Hash Key)
+    pk 구조: "type#id" (String, Hash Key)
+
+    [사용자 토큰 — pk: "user#{github_user_id}"]
     ├── access_token (GitHub App 사용자 토큰)
     ├── refresh_token
     ├── expires_at
     └── ttl (자동 만료)
+
+    [OAuth 인증 코드 — pk: "auth#{authorization_code}"]
+    ├── code_challenge (PKCE S256)
+    ├── state
+    ├── github_user_id
+    ├── redirect_uri
+    └── ttl (10분 후 자동 만료)
 ```
 
 ## OAuth 2.1 상세 흐름
@@ -83,12 +92,14 @@ claude.ai                    Lambda                   GitHub
    │                           │ ◄───────────────────── │
    │                           │                        │
    │                           │  6. GET /user          │
-   │                           │  + GET /orgs/fastfive-dev/members
+   │                           │  + GET /user/memberships/orgs/fastfive-dev
    │                           │  (사용자 정보 + 멤버십 검증)
    │                           │ ─────────────────────► │
    │                           │ ◄───────────────────── │
    │                           │                        │
-   │                           │  7. DynamoDB에 토큰 저장│
+   │                           │  7. DynamoDB에 저장:   │
+   │                           │     - GitHub 토큰 (user#id)
+   │                           │     - 인증코드 (auth#code, TTL 10분)
    │                           │                        │
    │  8. 302 redirect back     │                        │
    │  (authorization_code)     │                        │
@@ -121,14 +132,18 @@ claude.ai                    Lambda                   GitHub
 ### 보안 요소
 
 - PKCE (S256) 필수 — MCP OAuth 2.1 스펙 요구사항
-- state 파라미터로 CSRF 방지
-- 조직 멤버십 검증 실패 시 403 반환
+- state 파라미터로 CSRF 방지 (DynamoDB에 저장, /token에서 검증)
+- authorization_code는 crypto.randomBytes(32)로 생성, DynamoDB에 TTL 10분으로 저장
+- /token 엔드포인트에서 code_verifier를 code_challenge와 S256 검증 후 인증코드 레코드 삭제 (일회용)
+- 조직 멤버십 검증: `GET /user/memberships/orgs/{org}` 사용 (private 멤버도 정상 동작)
+- 멤버십 검증 실패 시 403 반환
 - GitHub 토큰은 DynamoDB에만 저장, 클라이언트에 노출되지 않음
 - MCP 토큰은 JWT로 발급, Lambda에서 서명 검증
 
 ### 토큰 갱신
 
-- GitHub App 사용자 토큰은 8시간 만료
+- GitHub App 설정에서 "Expire user authorization tokens" 반드시 활성화
+- 활성화 시 사용자 토큰은 8시간 만료, refresh_token 함께 발급
 - MCP 호출 시 만료 체크 → refresh_token으로 자동 갱신 → DynamoDB 업데이트
 - 팀원은 재로그인 불필요
 
@@ -138,7 +153,7 @@ claude.ai                    Lambda                   GitHub
 github-mcp/
 ├── src/
 │   ├── index.ts              # 수정: Lambda 핸들러 추가 (stdio/Lambda 분기)
-│   ├── github-client.ts      # 수정: 싱글톤 → 사용자별 인스턴스 팩토리
+│   ├── github-client.ts      # 수정: AsyncLocalStorage 기반 요청 컨텍스트
 │   ├── oauth/
 │   │   ├── handler.ts        # 신규: OAuth 엔드포인트 라우팅
 │   │   ├── github-app.ts     # 신규: GitHub App OAuth 로직 (토큰 교환, 갱신)
@@ -148,7 +163,7 @@ github-mcp/
 │   │   └── dynamo.ts         # 신규: DynamoDB 토큰 CRUD
 │   ├── mcp/
 │   │   └── handler.ts        # 신규: MCP Streamable HTTP 핸들러 (인증 미들웨어)
-│   └── tools/                # 변경 없음
+│   └── tools/                # 최소 수정 (getOctokit() 호출은 유지)
 │       ├── commits.ts
 │       ├── contributions.ts
 │       ├── loc.ts
@@ -164,17 +179,21 @@ github-mcp/
 ### 핵심 변경 포인트
 
 **`github-client.ts`** — 가장 중요한 변경:
-- 현재: `GITHUB_TOKEN` 환경변수로 싱글톤 Octokit 생성
-- 변경: 사용자별 토큰을 받아 Octokit 인스턴스를 생성하는 팩토리 패턴
-- stdio 모드는 기존 환경변수 토큰 사용 (하위호환 유지)
+- 현재: `GITHUB_TOKEN` 환경변수로 싱글톤 Octokit 생성, 모든 tool이 `getOctokit()` 직접 호출
+- 변경: `AsyncLocalStorage` 기반 요청 컨텍스트 도입
+  - `getOctokit()` 함수가 AsyncLocalStorage에서 현재 요청의 토큰을 읽어 Octokit 생성
+  - Lambda 모드: MCP 핸들러가 요청 시작 시 사용자 토큰으로 컨텍스트 설정
+  - stdio 모드: 기존 환경변수 토큰으로 컨텍스트 설정 (하위호환 유지)
+- 이 방식으로 tool 파일들의 `getOctokit()` 호출 코드는 그대로 유지하면서 사용자별 토큰 분리 달성
 
 **`index.ts`** — 진입점 분기:
 - stdio 모드: 기존 그대로 (Claude Code 로컬 사용)
 - Lambda 모드: API Gateway 이벤트를 OAuth/MCP 핸들러로 라우팅
 
-**`tools/`** — 변경 없음:
-- 이미 `GitHubClient` 인스턴스를 받아 사용하는 구조
-- 클라이언트만 사용자별로 바뀌면 자연스럽게 권한 분리
+**`tools/`** — 최소 수정:
+- 현재 모든 tool이 `getOctokit()`을 직접 호출하는 구조 (싱글톤 의존)
+- `getOctokit()`이 AsyncLocalStorage 기반으로 바뀌므로 tool 코드 자체는 변경 불필요
+- `github-client.ts`의 `fetchContributorStats`, `getOrgRepos` 등 헬퍼도 동일하게 동작
 
 ### 새 의존성
 
@@ -186,7 +205,7 @@ github-mcp/
 ### AWS 리소스
 
 - **HTTP API (API Gateway v2)**: HTTPS 엔드포인트, CORS 설정
-- **Lambda 함수**: Node.js 20.x, 256MB, 30초 타임아웃
+- **Lambda 함수**: Node.js 20.x, 256MB, 60초 타임아웃 (일부 도구가 여러 레포 순회하므로 여유 확보)
 - **DynamoDB 테이블**: PAY_PER_REQUEST, TTL 활성화
 
 ### 환경변수
@@ -213,6 +232,7 @@ github-mcp/
 1. GitHub App 생성 (`github.com/organizations/fastfive-dev/settings/apps/new`)
    - Callback URL: `https://{api-gateway-url}/callback`
    - 권한: Repository contents (read), Organization members (read)
+   - "Expire user authorization tokens" 활성화 (필수)
    - fastfive-dev 조직에 설치
 2. `sam deploy --guided` 로 AWS 배포
 3. Client ID, Client Secret, JWT Secret 설정
@@ -246,7 +266,7 @@ Claude Code `.mcp.json` 설정 — 변경 없음.
 
 ## 하위호환성
 
-- stdio 모드: 기존 동작 100% 유지
-- HTTP 모드 (`--http`): 기존 동작 유지
-- Lambda 모드: 새로 추가되는 진입점, 기존 코드에 영향 없음
-- tools/ 디렉토리: 코드 변경 없음
+- stdio 모드: 기존 동작 100% 유지 (AsyncLocalStorage가 환경변수 토큰 사용)
+- HTTP 모드 (`--http`): 기존 동작 유지 (인증 없이 로컬 개발용, 프로덕션에서는 Lambda 모드 사용)
+- Lambda 모드: 새로 추가되는 진입점, OAuth 인증 필수
+- tools/ 디렉토리: `getOctokit()` 호출 코드 변경 없음 (AsyncLocalStorage가 투명하게 처리)
