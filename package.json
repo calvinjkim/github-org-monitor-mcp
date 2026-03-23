@@ -1,0 +1,26 @@
+{
+  "name": "github-org-monitor-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for monitoring GitHub organization activity and member performance",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "github-org-monitor-mcp": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc && chmod 755 build/index.js",
+    "start": "node build/index.js"
+  },
+  "keywords": ["mcp", "github", "monitoring"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@octokit/rest": "^22.0.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "typescript": "^5.9.3"
+  }
+}
