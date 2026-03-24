@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getOctokit } from "../github-client.js";
+import { githubSlug, isoDate } from "./schemas.js";
 
 export function registerPRTools(server: McpServer) {
   server.registerTool(
@@ -10,14 +11,12 @@ export function registerPRTools(server: McpServer) {
       description:
         "Get pull request statistics for a specific user in a GitHub organization",
       inputSchema: z.object({
-        org: z.string().describe("GitHub organization name"),
-        username: z.string().describe("GitHub username"),
-        since: z
-          .string()
+        org: githubSlug.describe("GitHub organization name"),
+        username: githubSlug.describe("GitHub username"),
+        since: isoDate
           .optional()
           .describe("Start date (ISO 8601, e.g., '2024-01-01')"),
-        until: z
-          .string()
+        until: isoDate
           .optional()
           .describe("End date (ISO 8601, e.g., '2024-12-31')"),
         state: z
@@ -34,7 +33,7 @@ export function registerPRTools(server: McpServer) {
       const octokit = getOctokit();
       const stateFilter = state ?? "all";
 
-      // Build search query
+      // Build search query (username/org validated by Zod regex)
       let query = `is:pr author:${username} org:${org}`;
       if (stateFilter === "open") query += " is:open";
       else if (stateFilter === "closed") query += " is:closed";

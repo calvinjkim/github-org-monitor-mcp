@@ -85,20 +85,82 @@ export async function getAndDeleteAuthCode(
   code: string
 ): Promise<AuthCode | null> {
   const key = { pk: `auth#${code}` };
-  const result = await docClient.send(
-    new GetCommand({ TableName: getTableName(), Key: key })
-  );
-  if (!result.Item) return null;
+  // Atomic delete-and-return to prevent race conditions
+  try {
+    const result = await docClient.send(
+      new DeleteCommand({
+        TableName: getTableName(),
+        Key: key,
+        ReturnValues: "ALL_OLD",
+        ConditionExpression: "attribute_exists(pk)",
+      })
+    );
+    if (!result.Attributes) return null;
+    return {
+      code,
+      codeChallenge: result.Attributes.codeChallenge as string,
+      githubUserId: result.Attributes.githubUserId as string,
+      redirectUri: result.Attributes.redirectUri as string,
+    };
+  } catch (err: unknown) {
+    // ConditionalCheckFailedException means item was already deleted
+    if (
+      err instanceof Error &&
+      err.name === "ConditionalCheckFailedException"
+    ) {
+      return null;
+    }
+    throw err;
+  }
+}
 
-  // Delete immediately (one-time use)
+// --- OAuth state (pk: "state#{state}") ---
+
+export interface OAuthState {
+  codeChallenge: string;
+  redirectUri: string;
+}
+
+export async function saveOAuthState(
+  state: string,
+  codeChallenge: string,
+  redirectUri: string
+): Promise<void> {
+  const ttl = Math.floor(Date.now() / 1000) + 10 * 60; // 10 minutes
   await docClient.send(
-    new DeleteCommand({ TableName: getTableName(), Key: key })
+    new PutCommand({
+      TableName: getTableName(),
+      Item: { pk: `state#${state}`, codeChallenge, redirectUri, ttl },
+    })
   );
+}
 
-  return {
-    code,
-    codeChallenge: result.Item.codeChallenge as string,
-    githubUserId: result.Item.githubUserId as string,
-    redirectUri: result.Item.redirectUri as string,
-  };
+export async function getAndDeleteOAuthState(
+  state: string
+): Promise<OAuthState | null> {
+  const key = { pk: `state#${state}` };
+  // Atomic delete-and-return to prevent race conditions
+  try {
+    const result = await docClient.send(
+      new DeleteCommand({
+        TableName: getTableName(),
+        Key: key,
+        ReturnValues: "ALL_OLD",
+        ConditionExpression: "attribute_exists(pk)",
+      })
+    );
+    if (!result.Attributes) return null;
+    return {
+      codeChallenge: result.Attributes.codeChallenge as string,
+      redirectUri: result.Attributes.redirectUri as string,
+    };
+  } catch (err: unknown) {
+    if (
+      err instanceof Error &&
+      err.name === "ConditionalCheckFailedException"
+    ) {
+      return null;
+    }
+    throw err;
+  }
 }

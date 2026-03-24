@@ -1,31 +1,9 @@
 #!/usr/bin/env node
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
-import { registerOrgTools } from "./tools/org.js";
-import { registerCommitTools } from "./tools/commits.js";
-import { registerPRTools } from "./tools/pull-requests.js";
-import { registerReviewTools } from "./tools/reviews.js";
-import { registerLOCTools } from "./tools/loc.js";
-import { registerContributionTools } from "./tools/contributions.js";
-
-function createMcpServer(): McpServer {
-  const server = new McpServer({
-    name: "github-org-monitor",
-    version: "1.0.0",
-  });
-
-  registerOrgTools(server);
-  registerCommitTools(server);
-  registerPRTools(server);
-  registerReviewTools(server);
-  registerLOCTools(server);
-  registerContributionTools(server);
-
-  return server;
-}
+import { createMcpServer } from "./server.js";
 
 async function startStdio() {
   const server = createMcpServer();
@@ -45,7 +23,7 @@ async function startHttp(port: number) {
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     // CORS headers
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, mcp-session-id");
 
     if (req.method === "OPTIONS") {
@@ -65,12 +43,17 @@ async function startHttp(port: number) {
     if (req.url === "/mcp") {
       // Parse body for POST requests
       if (req.method === "POST") {
-        const chunks: Buffer[] = [];
-        for await (const chunk of req) {
-          chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) {
+            chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+          }
+          const body = JSON.parse(Buffer.concat(chunks).toString());
+          await transport.handleRequest(req, res, body);
+        } catch {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid JSON body" }));
         }
-        const body = JSON.parse(Buffer.concat(chunks).toString());
-        await transport.handleRequest(req, res, body);
       } else {
         await transport.handleRequest(req, res);
       }

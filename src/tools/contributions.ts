@@ -5,6 +5,8 @@ import {
   fetchContributorStats,
   getOrgRepos,
 } from "../github-client.js";
+import { githubSlug, isoDate } from "./schemas.js";
+import { mapConcurrent } from "../utils/concurrency.js";
 
 export function registerContributionTools(server: McpServer) {
   // get_repo_contributors
@@ -15,16 +17,12 @@ export function registerContributionTools(server: McpServer) {
       description:
         "Get contributor rankings for a specific repository (commits, additions, deletions)",
       inputSchema: z.object({
-        owner: z
-          .string()
-          .describe("Repository owner (organization or user)"),
+        owner: githubSlug.describe("Repository owner (organization or user)"),
         repo: z.string().describe("Repository name"),
-        since: z
-          .string()
+        since: isoDate
           .optional()
           .describe("Start date (ISO 8601, e.g., '2024-01-01')"),
-        until: z
-          .string()
+        until: isoDate
           .optional()
           .describe("End date (ISO 8601, e.g., '2024-12-31')"),
       }),
@@ -90,16 +88,12 @@ export function registerContributionTools(server: McpServer) {
       description:
         "Get overall statistics for a repository (commits, PRs, contributors, recent activity)",
       inputSchema: z.object({
-        owner: z
-          .string()
-          .describe("Repository owner (organization or user)"),
+        owner: githubSlug.describe("Repository owner (organization or user)"),
         repo: z.string().describe("Repository name"),
-        since: z
-          .string()
+        since: isoDate
           .optional()
           .describe("Start date (ISO 8601, e.g., '2024-01-01')"),
-        until: z
-          .string()
+        until: isoDate
           .optional()
           .describe("End date (ISO 8601, e.g., '2024-12-31')"),
       }),
@@ -119,7 +113,7 @@ export function registerContributionTools(server: McpServer) {
         ...commitParams,
       });
 
-      // Get PRs
+      // Get PRs (owner validated by Zod regex)
       let prQuery = `is:pr repo:${owner}/${repo}`;
       if (since) prQuery += ` created:>=${since}`;
       if (until) prQuery += ` created:<=${until}`;
@@ -194,14 +188,12 @@ export function registerContributionTools(server: McpServer) {
       description:
         "Get a comprehensive activity summary for a member across all organization repositories (commits, PRs, reviews, LOC)",
       inputSchema: z.object({
-        org: z.string().describe("GitHub organization name"),
-        username: z.string().describe("GitHub username"),
-        since: z
-          .string()
+        org: githubSlug.describe("GitHub organization name"),
+        username: githubSlug.describe("GitHub username"),
+        since: isoDate
           .optional()
           .describe("Start date (ISO 8601, e.g., '2024-01-01')"),
-        until: z
-          .string()
+        until: isoDate
           .optional()
           .describe("End date (ISO 8601, e.g., '2024-12-31')"),
       }),
@@ -216,19 +208,15 @@ export function registerContributionTools(server: McpServer) {
         ? new Date(until).getTime() / 1000
         : Date.now() / 1000;
 
-      // LOC from contributor stats
-      let totalAdditions = 0;
-      let totalDeletions = 0;
-      let locCommits = 0;
-      const activeRepoNames: string[] = [];
-
-      for (const r of activeRepos) {
-        try {
+      // LOC from contributor stats (parallelized)
+      const locResults = await mapConcurrent(
+        activeRepos,
+        async (r) => {
           const stats = await fetchContributorStats(org, r.name);
           const userStats = stats.find(
             (s) => s.author.login.toLowerCase() === username.toLowerCase()
           );
-          if (!userStats) continue;
+          if (!userStats) return null;
 
           let repoAdditions = 0;
           let repoDeletions = 0;
@@ -243,17 +231,33 @@ export function registerContributionTools(server: McpServer) {
           }
 
           if (repoCommits > 0) {
-            activeRepoNames.push(r.name);
-            totalAdditions += repoAdditions;
-            totalDeletions += repoDeletions;
-            locCommits += repoCommits;
+            return {
+              name: r.name,
+              additions: repoAdditions,
+              deletions: repoDeletions,
+              commits: repoCommits,
+            };
           }
-        } catch {
-          // Skip
+          return null;
+        },
+        5
+      );
+
+      let totalAdditions = 0;
+      let totalDeletions = 0;
+      let locCommits = 0;
+      const activeRepoNames: string[] = [];
+
+      for (const result of locResults) {
+        if (result) {
+          activeRepoNames.push(result.name);
+          totalAdditions += result.additions;
+          totalDeletions += result.deletions;
+          locCommits += result.commits;
         }
       }
 
-      // PRs authored (via search)
+      // PRs authored (via search, username/org validated by Zod regex)
       let prQuery = `is:pr author:${username} org:${org}`;
       if (since) prQuery += ` created:>=${since}`;
       if (until) prQuery += ` created:<=${until}`;

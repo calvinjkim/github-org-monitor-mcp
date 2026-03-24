@@ -40,8 +40,3 @@ export function generateAuthCode(): string {
   return randomBytes(32).toString("hex");
 }
 
-// --- State parameter ---
-
-export function generateState(): string {
-  return randomBytes(16).toString("hex");
-}

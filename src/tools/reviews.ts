@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getOctokit } from "../github-client.js";
+import { githubSlug, isoDate } from "./schemas.js";
 
 export function registerReviewTools(server: McpServer) {
   server.registerTool(
@@ -10,14 +11,12 @@ export function registerReviewTools(server: McpServer) {
       description:
         "Get code review activity for a specific user in a GitHub organization",
       inputSchema: z.object({
-        org: z.string().describe("GitHub organization name"),
-        username: z.string().describe("GitHub username"),
-        since: z
-          .string()
+        org: githubSlug.describe("GitHub organization name"),
+        username: githubSlug.describe("GitHub username"),
+        since: isoDate
           .optional()
           .describe("Start date (ISO 8601, e.g., '2024-01-01')"),
-        until: z
-          .string()
+        until: isoDate
           .optional()
           .describe("End date (ISO 8601, e.g., '2024-12-31')"),
         repo: z
@@ -29,7 +28,7 @@ export function registerReviewTools(server: McpServer) {
     async ({ org, username, since, until, repo }) => {
       const octokit = getOctokit();
 
-      // Search for PRs reviewed by the user
+      // Search for PRs reviewed by the user (username/org validated by Zod regex)
       let query = `is:pr reviewed-by:${username} org:${org}`;
       if (repo) query += ` repo:${org}/${repo}`;
       if (since) query += ` created:>=${since}`;

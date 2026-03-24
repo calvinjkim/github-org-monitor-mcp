@@ -1,6 +1,8 @@
 import { z } from "zod/v4";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { fetchContributorStats, getOrgRepos } from "../github-client.js";
+import { githubSlug, isoDate } from "./schemas.js";
+import { mapConcurrent } from "../utils/concurrency.js";
 
 export function registerLOCTools(server: McpServer) {
   server.registerTool(
@@ -10,14 +12,12 @@ export function registerLOCTools(server: McpServer) {
       description:
         "Get lines of code (additions/deletions) for a specific user across organization repositories",
       inputSchema: z.object({
-        org: z.string().describe("GitHub organization name"),
-        username: z.string().describe("GitHub username"),
-        since: z
-          .string()
+        org: githubSlug.describe("GitHub organization name"),
+        username: githubSlug.describe("GitHub username"),
+        since: isoDate
           .optional()
           .describe("Start date (ISO 8601, e.g., '2024-01-01')"),
-        until: z
-          .string()
+        until: isoDate
           .optional()
           .describe("End date (ISO 8601, e.g., '2024-12-31')"),
         repo: z
@@ -40,24 +40,14 @@ export function registerLOCTools(server: McpServer) {
         ? new Date(until).getTime() / 1000
         : Date.now() / 1000;
 
-      const repoStats: Array<{
-        repo: string;
-        additions: number;
-        deletions: number;
-        commits: number;
-      }> = [];
-      let totalAdditions = 0;
-      let totalDeletions = 0;
-      let totalCommits = 0;
-
-      for (const repoName of repoNames) {
-        try {
+      const repoStats = await mapConcurrent(
+        repoNames,
+        async (repoName) => {
           const stats = await fetchContributorStats(org, repoName);
           const userStats = stats.find(
             (s) => s.author.login.toLowerCase() === username.toLowerCase()
           );
-
-          if (!userStats) continue;
+          if (!userStats) return null;
 
           let additions = 0;
           let deletions = 0;
@@ -72,17 +62,28 @@ export function registerLOCTools(server: McpServer) {
           }
 
           if (additions > 0 || deletions > 0 || commits > 0) {
-            repoStats.push({ repo: repoName, additions, deletions, commits });
-            totalAdditions += additions;
-            totalDeletions += deletions;
-            totalCommits += commits;
+            return { repo: repoName, additions, deletions, commits };
           }
-        } catch {
-          // Skip repos with errors
-        }
+          return null;
+        },
+        5
+      );
+
+      const validStats = repoStats.filter(
+        (s): s is { repo: string; additions: number; deletions: number; commits: number } =>
+          s !== null
+      );
+
+      let totalAdditions = 0;
+      let totalDeletions = 0;
+      let totalCommits = 0;
+      for (const s of validStats) {
+        totalAdditions += s.additions;
+        totalDeletions += s.deletions;
+        totalCommits += s.commits;
       }
 
-      repoStats.sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions));
+      validStats.sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions));
 
       return {
         content: [
@@ -97,8 +98,8 @@ export function registerLOCTools(server: McpServer) {
                 total_deletions: totalDeletions,
                 net_lines: totalAdditions - totalDeletions,
                 total_commits: totalCommits,
-                repos_with_changes: repoStats.length,
-                by_repo: repoStats,
+                repos_with_changes: validStats.length,
+                by_repo: validStats,
               },
               null,
               2

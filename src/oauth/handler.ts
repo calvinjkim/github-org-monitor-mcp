@@ -5,14 +5,13 @@ import {
   getGitHubUser,
 } from "./github-app.js";
 import { verifyOrgMembership } from "./membership.js";
-import { saveUserToken, saveAuthCode, getAndDeleteAuthCode } from "../storage/dynamo.js";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
-  DynamoDBDocumentClient,
-  PutCommand,
-  GetCommand,
-  DeleteCommand,
-} from "@aws-sdk/lib-dynamodb";
+  saveUserToken,
+  saveAuthCode,
+  getAndDeleteAuthCode,
+  saveOAuthState,
+  getAndDeleteOAuthState,
+} from "../storage/dynamo.js";
 
 export interface LambdaRequest {
   method: string;
@@ -30,43 +29,6 @@ export interface LambdaResponse {
 
 function getBaseUrl(): string {
   return process.env.BASE_URL || "";
-}
-
-// DynamoDB for OAuth state records
-const ddbClient = DynamoDBDocumentClient.from(new DynamoDBClient({}));
-function getTableName(): string {
-  return process.env.TOKEN_TABLE || "mcp-github-tokens";
-}
-
-async function saveOAuthState(
-  state: string,
-  codeChallenge: string,
-  redirectUri: string
-): Promise<void> {
-  const ttl = Math.floor(Date.now() / 1000) + 10 * 60;
-  await ddbClient.send(
-    new PutCommand({
-      TableName: getTableName(),
-      Item: { pk: `state#${state}`, codeChallenge, redirectUri, ttl },
-    })
-  );
-}
-
-async function getAndDeleteOAuthState(
-  state: string
-): Promise<{ codeChallenge: string; redirectUri: string } | null> {
-  const key = { pk: `state#${state}` };
-  const result = await ddbClient.send(
-    new GetCommand({ TableName: getTableName(), Key: key })
-  );
-  if (!result.Item) return null;
-  await ddbClient.send(
-    new DeleteCommand({ TableName: getTableName(), Key: key })
-  );
-  return {
-    codeChallenge: result.Item.codeChallenge as string,
-    redirectUri: result.Item.redirectUri as string,
-  };
 }
 
 function handleMetadata(): LambdaResponse {
@@ -93,6 +55,7 @@ async function handleAuthorize(
   if (!code_challenge || !state || !redirect_uri) {
     return {
       statusCode: 400,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         error: "invalid_request",
         error_description: "code_challenge, state, and redirect_uri are required",
@@ -120,6 +83,7 @@ async function handleCallback(
   if (!code || !state) {
     return {
       statusCode: 400,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ error: "Missing code or state" }),
     };
   }
@@ -128,6 +92,7 @@ async function handleCallback(
   if (!stateRecord) {
     return {
       statusCode: 400,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ error: "Invalid or expired state" }),
     };
   }
@@ -185,16 +150,18 @@ async function handleToken(body: string): Promise<LambdaResponse> {
   } catch {
     return {
       statusCode: 400,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ error: "invalid_request" }),
     };
   }
 
-  const { grant_type, code, code_verifier } = params;
+  const { grant_type, code, code_verifier, redirect_uri } = params;
 
   if (grant_type === "authorization_code") {
     if (!code || !code_verifier) {
       return {
         statusCode: 400,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           error: "invalid_request",
           error_description: "code and code_verifier are required",
@@ -206,13 +173,27 @@ async function handleToken(body: string): Promise<LambdaResponse> {
     if (!authCodeRecord) {
       return {
         statusCode: 400,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ error: "invalid_grant" }),
+      };
+    }
+
+    // Verify redirect_uri matches the one from the authorization request
+    if (redirect_uri && redirect_uri !== authCodeRecord.redirectUri) {
+      return {
+        statusCode: 400,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          error: "invalid_grant",
+          error_description: "redirect_uri mismatch",
+        }),
       };
     }
 
     if (!verifyPkce(code_verifier, authCodeRecord.codeChallenge)) {
       return {
         statusCode: 400,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ error: "invalid_grant", error_description: "PKCE verification failed" }),
       };
     }
@@ -232,6 +213,7 @@ async function handleToken(body: string): Promise<LambdaResponse> {
 
   return {
     statusCode: 400,
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ error: "unsupported_grant_type" }),
   };
 }
@@ -258,5 +240,9 @@ export async function handleOAuthRequest(
     return handleToken(body || "");
   }
 
-  return { statusCode: 404, body: JSON.stringify({ error: "Not found" }) };
+  return {
+    statusCode: 404,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ error: "Not found" }),
+  };
 }

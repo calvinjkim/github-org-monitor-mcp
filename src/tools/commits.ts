@@ -1,6 +1,8 @@
 import { z } from "zod/v4";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getOctokit, getOrgRepos } from "../github-client.js";
+import { githubSlug, isoDate } from "./schemas.js";
+import { mapConcurrent } from "../utils/concurrency.js";
 
 export function registerCommitTools(server: McpServer) {
   server.registerTool(
@@ -10,14 +12,12 @@ export function registerCommitTools(server: McpServer) {
       description:
         "Get commit statistics for a specific user across organization repositories",
       inputSchema: z.object({
-        org: z.string().describe("GitHub organization name"),
-        username: z.string().describe("GitHub username"),
-        since: z
-          .string()
+        org: githubSlug.describe("GitHub organization name"),
+        username: githubSlug.describe("GitHub username"),
+        since: isoDate
           .optional()
           .describe("Start date (ISO 8601, e.g., '2024-01-01')"),
-        until: z
-          .string()
+        until: isoDate
           .optional()
           .describe("End date (ISO 8601, e.g., '2024-12-31')"),
         repo: z
@@ -37,11 +37,9 @@ export function registerCommitTools(server: McpServer) {
             .filter((r) => !r.archived)
             .map((r) => r.name);
 
-      const repoStats: Array<{ repo: string; commits: number }> = [];
-      let totalCommits = 0;
-
-      for (const repoName of repoNames) {
-        try {
+      const repoStats = await mapConcurrent(
+        repoNames,
+        async (repoName) => {
           const commits = await octokit.paginate(octokit.repos.listCommits, {
             owner: org,
             repo: repoName,
@@ -50,17 +48,19 @@ export function registerCommitTools(server: McpServer) {
             ...(until && { until }),
             per_page: 100,
           });
-
           if (commits.length > 0) {
-            repoStats.push({ repo: repoName, commits: commits.length });
-            totalCommits += commits.length;
+            return { repo: repoName, commits: commits.length };
           }
-        } catch {
-          // Skip repos with errors (e.g., empty repos)
-        }
-      }
+          return null;
+        },
+        5
+      );
 
-      repoStats.sort((a, b) => b.commits - a.commits);
+      const validStats = repoStats.filter(
+        (s): s is { repo: string; commits: number } => s !== null
+      );
+      const totalCommits = validStats.reduce((sum, s) => sum + s.commits, 0);
+      validStats.sort((a, b) => b.commits - a.commits);
 
       return {
         content: [
@@ -72,8 +72,8 @@ export function registerCommitTools(server: McpServer) {
                 org,
                 period: { since: since ?? "all time", until: until ?? "now" },
                 total_commits: totalCommits,
-                repos_with_commits: repoStats.length,
-                by_repo: repoStats,
+                repos_with_commits: validStats.length,
+                by_repo: validStats,
               },
               null,
               2

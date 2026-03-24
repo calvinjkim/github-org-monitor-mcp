@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getOctokit } from "../github-client.js";
+import { githubSlug } from "./schemas.js";
 
 export function registerOrgTools(server: McpServer) {
   // list_org_members
@@ -10,7 +11,7 @@ export function registerOrgTools(server: McpServer) {
       title: "List Organization Members",
       description: "List all members of a GitHub organization",
       inputSchema: z.object({
-        org: z.string().describe("GitHub organization name"),
+        org: githubSlug.describe("GitHub organization name"),
       }),
     },
     async ({ org }) => {
@@ -49,7 +50,7 @@ export function registerOrgTools(server: McpServer) {
       title: "List Organization Teams",
       description: "List all teams in a GitHub organization",
       inputSchema: z.object({
-        org: z.string().describe("GitHub organization name"),
+        org: githubSlug.describe("GitHub organization name"),
       }),
     },
     async ({ org }) => {
@@ -89,8 +90,8 @@ export function registerOrgTools(server: McpServer) {
       title: "List Team Members",
       description: "List all members of a specific team in a GitHub organization",
       inputSchema: z.object({
-        org: z.string().describe("GitHub organization name"),
-        team_slug: z.string().describe("Team slug (e.g., 'backend-team')"),
+        org: githubSlug.describe("GitHub organization name"),
+        team_slug: githubSlug.describe("Team slug (e.g., 'backend-team')"),
       }),
     },
     async ({ org, team_slug }) => {
@@ -129,7 +130,7 @@ export function registerOrgTools(server: McpServer) {
       description:
         "List all repositories in a GitHub organization with basic info",
       inputSchema: z.object({
-        org: z.string().describe("GitHub organization name"),
+        org: githubSlug.describe("GitHub organization name"),
         include_archived: z
           .boolean()
           .optional()
