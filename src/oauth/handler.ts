@@ -178,8 +178,8 @@ async function handleToken(body: string): Promise<LambdaResponse> {
       };
     }
 
-    // Verify redirect_uri matches the one from the authorization request
-    if (redirect_uri && redirect_uri !== authCodeRecord.redirectUri) {
+    // Verify redirect_uri matches the one from the authorization request (required per RFC 6749 4.1.3)
+    if (!redirect_uri || redirect_uri !== authCodeRecord.redirectUri) {
       return {
         statusCode: 400,
         headers: { "Content-Type": "application/json" },

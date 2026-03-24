@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { fetchContributorStats, getOrgRepos } from "../github-client.js";
 import { githubSlug, isoDate } from "./schemas.js";
 import { mapConcurrent } from "../utils/concurrency.js";
+import { toUnixSeconds } from "../utils/dates.js";
 
 export function registerLOCTools(server: McpServer) {
   server.registerTool(
@@ -35,10 +36,8 @@ export function registerLOCTools(server: McpServer) {
             .filter((r) => !r.archived)
             .map((r) => r.name);
 
-      const sinceTs = since ? new Date(since).getTime() / 1000 : 0;
-      const untilTs = until
-        ? new Date(until).getTime() / 1000
-        : Date.now() / 1000;
+      const sinceTs = toUnixSeconds(since);
+      const untilTs = toUnixSeconds(until, Date.now() / 1000);
 
       const { results: repoStats, errors } = await mapConcurrent(
         repoNames,

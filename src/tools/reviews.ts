@@ -49,6 +49,7 @@ export function registerReviewTools(server: McpServer) {
       let changesRequestedCount = 0;
       let commentedCount = 0;
       const byRepo: Record<string, number> = {};
+      const warnings: string[] = [];
 
       for (const pr of prsToCheck) {
         const repoName = pr.repository_url?.split("/").pop() ?? "unknown";
@@ -76,8 +77,10 @@ export function registerReviewTools(server: McpServer) {
                 break;
             }
           }
-        } catch {
-          // Skip if we can't access the PR
+        } catch (err) {
+          warnings.push(
+            `Failed to fetch reviews for PR #${pr.number} in ${repoName}: ${err instanceof Error ? err.message : String(err)}`
+          );
         }
       }
 
@@ -100,10 +103,10 @@ export function registerReviewTools(server: McpServer) {
                 changes_requested: changesRequestedCount,
                 commented: commentedCount,
                 by_repo: repoBreakdown,
-                note:
-                  searchResults.length > 50
-                    ? "Review details limited to first 50 PRs to manage API rate limits"
-                    : undefined,
+                ...(searchResults.length > 50 && {
+                  note: "Review details limited to first 50 PRs to manage API rate limits",
+                }),
+                ...(warnings.length > 0 && { warnings }),
               },
               null,
               2

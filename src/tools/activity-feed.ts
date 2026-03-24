@@ -3,6 +3,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getOctokit } from "../github-client.js";
 import { githubSlug } from "./schemas.js";
 
+/** Safely extract a nested property from untyped payload */
+function pluck<T>(obj: unknown, key: string): T | undefined {
+  if (obj && typeof obj === "object" && key in obj) {
+    return (obj as Record<string, unknown>)[key] as T;
+  }
+  return undefined;
+}
+
 export function registerActivityFeedTools(server: McpServer) {
   // get_org_activity
   server.registerTool(
@@ -54,18 +62,22 @@ export function registerActivityFeedTools(server: McpServer) {
         };
 
         const payload = e.payload as Record<string, unknown>;
+        const pr = pluck<Record<string, unknown>>(payload, "pull_request");
+        const issue = pluck<Record<string, unknown>>(payload, "issue");
+        const release = pluck<Record<string, unknown>>(payload, "release");
+        const review = pluck<Record<string, unknown>>(payload, "review");
 
         switch (e.type) {
           case "PushEvent":
             return {
               ...base,
               ref: payload.ref,
-              commits: (payload.commits as Array<{ message: string; author: { name: string } }>)
-                ?.slice(0, 5)
-                .map((c) => ({
-                  message: c.message?.split("\n")[0],
-                  author: c.author?.name,
-                })),
+              commits: Array.isArray(payload.commits)
+                ? payload.commits.slice(0, 5).map((c: Record<string, unknown>) => ({
+                    message: String(c.message ?? "").split("\n")[0],
+                    author: (c.author as Record<string, unknown>)?.name,
+                  }))
+                : [],
               size: payload.size,
             };
 
@@ -73,35 +85,35 @@ export function registerActivityFeedTools(server: McpServer) {
             return {
               ...base,
               action: payload.action,
-              pr_number: (payload.pull_request as { number: number })?.number,
-              pr_title: (payload.pull_request as { title: string })?.title,
-              merged: (payload.pull_request as { merged: boolean })?.merged,
+              pr_number: pr?.number,
+              pr_title: pr?.title,
+              merged: pr?.merged,
             };
 
           case "PullRequestReviewEvent":
             return {
               ...base,
               action: payload.action,
-              review_state: (payload.review as { state: string })?.state,
-              pr_number: (payload.pull_request as { number: number })?.number,
-              pr_title: (payload.pull_request as { title: string })?.title,
+              review_state: review?.state,
+              pr_number: pr?.number,
+              pr_title: pr?.title,
             };
 
           case "IssuesEvent":
             return {
               ...base,
               action: payload.action,
-              issue_number: (payload.issue as { number: number })?.number,
-              issue_title: (payload.issue as { title: string })?.title,
+              issue_number: issue?.number,
+              issue_title: issue?.title,
             };
 
           case "IssueCommentEvent":
             return {
               ...base,
               action: payload.action,
-              issue_number: (payload.issue as { number: number })?.number,
-              issue_title: (payload.issue as { title: string })?.title,
-              comment_body: ((payload.comment as { body: string })?.body || "").substring(0, 200),
+              issue_number: issue?.number,
+              issue_title: issue?.title,
+              comment_body: String(pluck<Record<string, unknown>>(payload, "comment")?.body ?? "").substring(0, 200),
             };
 
           case "CreateEvent":
@@ -122,15 +134,15 @@ export function registerActivityFeedTools(server: McpServer) {
             return {
               ...base,
               action: payload.action,
-              release_name: (payload.release as { name: string })?.name,
-              tag: (payload.release as { tag_name: string })?.tag_name,
-              prerelease: (payload.release as { prerelease: boolean })?.prerelease,
+              release_name: release?.name,
+              tag: release?.tag_name,
+              prerelease: release?.prerelease,
             };
 
           case "ForkEvent":
             return {
               ...base,
-              forkee: (payload.forkee as { full_name: string })?.full_name,
+              forkee: pluck<Record<string, unknown>>(payload, "forkee")?.full_name,
             };
 
           default:
@@ -199,6 +211,8 @@ export function registerActivityFeedTools(server: McpServer) {
 
       const formatted = events.map((e) => {
         const payload = e.payload as Record<string, unknown>;
+        const pr = pluck<Record<string, unknown>>(payload, "pull_request");
+        const issue = pluck<Record<string, unknown>>(payload, "issue");
         return {
           type: e.type,
           actor: e.actor?.login,
@@ -206,20 +220,20 @@ export function registerActivityFeedTools(server: McpServer) {
           action: payload.action ?? null,
           ...(e.type === "PushEvent" && {
             ref: payload.ref,
-            commits: (payload.commits as Array<{ message: string; author: { name: string } }>)
-              ?.slice(0, 5)
-              .map((c) => ({
-                message: c.message?.split("\n")[0],
-                author: c.author?.name,
-              })),
+            commits: Array.isArray(payload.commits)
+              ? payload.commits.slice(0, 5).map((c: Record<string, unknown>) => ({
+                  message: String(c.message ?? "").split("\n")[0],
+                  author: (c.author as Record<string, unknown>)?.name,
+                }))
+              : [],
           }),
           ...(e.type === "PullRequestEvent" && {
-            pr_number: (payload.pull_request as { number: number })?.number,
-            pr_title: (payload.pull_request as { title: string })?.title,
+            pr_number: pr?.number,
+            pr_title: pr?.title,
           }),
           ...(e.type === "IssuesEvent" && {
-            issue_number: (payload.issue as { number: number })?.number,
-            issue_title: (payload.issue as { title: string })?.title,
+            issue_number: issue?.number,
+            issue_title: issue?.title,
           }),
         };
       });

@@ -70,6 +70,15 @@ async function startHttp(port: number) {
   });
 }
 
+// Validate required env vars early
+if (!process.env.GITHUB_TOKEN) {
+  console.error(
+    "Error: GITHUB_TOKEN environment variable is required.\n" +
+    "Create a Personal Access Token at https://github.com/settings/tokens with 'repo', 'read:org' scopes."
+  );
+  process.exit(1);
+}
+
 // CLI argument parsing
 const args = process.argv.slice(2);
 const isHttp = args.includes("--http");

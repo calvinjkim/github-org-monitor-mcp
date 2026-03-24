@@ -93,78 +93,90 @@ export async function handleMcpRequest(
   }
 
   // 3. Run MCP request within AsyncLocalStorage context
-  return new Promise((resolve) => {
-    requestContext.run({ token: githubToken }, async () => {
-      try {
-        const server = createMcpServer();
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: undefined,
-        });
-
-        await server.connect(transport);
-
-        const bodyObj = JSON.parse(req.body);
-
-        const chunks: Buffer[] = [];
-        let responseHeaders: Record<string, string> = {};
-        let responseStatus = 200;
-
-        const mockRes = {
-          writeHead(status: number, headers?: Record<string, string | string[]>) {
-            responseStatus = status;
-            if (headers) {
-              for (const [k, v] of Object.entries(headers)) {
-                responseHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
-              }
-            }
-            return this;
-          },
-          setHeader(name: string, value: string) {
-            responseHeaders[name] = value;
-          },
-          getHeader(name: string) {
-            return responseHeaders[name];
-          },
-          end(data?: string | Buffer) {
-            if (data) {
-              chunks.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
-            }
-            resolve({
-              statusCode: responseStatus,
-              headers: { "Content-Type": "application/json", ...responseHeaders },
-              body: Buffer.concat(chunks).toString(),
-            });
-          },
-          write(data: string | Buffer) {
-            chunks.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
-            return true;
-          },
-          on() { return this; },
-          once() { return this; },
-          emit() { return false; },
-          removeListener() { return this; },
-        } as unknown as ServerResponse;
-
-        const mockReq = {
-          method: "POST",
-          url: "/mcp",
-          headers: { "content-type": "application/json", ...req.headers },
-          on() { return this; },
-          once() { return this; },
-          emit() { return false; },
-          removeListener() { return this; },
-        } as unknown as IncomingMessage;
-
-        await transport.handleRequest(mockReq, mockRes, bodyObj);
-      } catch (err) {
+  return requestContext.run({ token: githubToken }, () => {
+    return new Promise<McpLambdaResponse>((resolve) => {
+      const timer = setTimeout(() => {
         resolve({
-          statusCode: 500,
+          statusCode: 504,
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            error: err instanceof Error ? err.message : "Internal error",
-          }),
+          body: JSON.stringify({ error: "Request timed out" }),
         });
-      }
+      }, 25_000); // 25s safety timeout (Lambda is 30s)
+
+      (async () => {
+        try {
+          const server = createMcpServer();
+          const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: undefined,
+          });
+
+          await server.connect(transport);
+
+          const bodyObj = JSON.parse(req.body);
+
+          const chunks: Buffer[] = [];
+          let responseHeaders: Record<string, string> = {};
+          let responseStatus = 200;
+
+          const mockRes = {
+            writeHead(status: number, headers?: Record<string, string | string[]>) {
+              responseStatus = status;
+              if (headers) {
+                for (const [k, v] of Object.entries(headers)) {
+                  responseHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
+                }
+              }
+              return this;
+            },
+            setHeader(name: string, value: string) {
+              responseHeaders[name] = value;
+            },
+            getHeader(name: string) {
+              return responseHeaders[name];
+            },
+            end(data?: string | Buffer) {
+              clearTimeout(timer);
+              if (data) {
+                chunks.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+              }
+              resolve({
+                statusCode: responseStatus,
+                headers: { "Content-Type": "application/json", ...responseHeaders },
+                body: Buffer.concat(chunks).toString(),
+              });
+            },
+            write(data: string | Buffer) {
+              chunks.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+              return true;
+            },
+            on() { return this; },
+            once() { return this; },
+            emit() { return false; },
+            removeListener() { return this; },
+          } as unknown as ServerResponse;
+
+          const mockReq = {
+            method: "POST",
+            url: "/mcp",
+            headers: { "content-type": "application/json", ...req.headers },
+            on() { return this; },
+            once() { return this; },
+            emit() { return false; },
+            removeListener() { return this; },
+          } as unknown as IncomingMessage;
+
+          await transport.handleRequest(mockReq, mockRes, bodyObj);
+        } catch (err) {
+          clearTimeout(timer);
+          resolve({
+            statusCode: 500,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              error: err instanceof Error ? err.message : "Internal error",
+            }),
+          });
+        }
+      })();
     });
   });
 }

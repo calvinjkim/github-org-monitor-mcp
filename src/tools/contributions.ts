@@ -8,6 +8,7 @@ import {
 } from "../github-client.js";
 import { githubSlug, isoDate } from "./schemas.js";
 import { mapConcurrent } from "../utils/concurrency.js";
+import { toUnixSeconds } from "../utils/dates.js";
 
 export function registerContributionTools(server: McpServer) {
   // get_repo_contributors
@@ -31,10 +32,8 @@ export function registerContributionTools(server: McpServer) {
     async ({ owner, repo, since, until }) => {
       const stats = await fetchContributorStats(owner, repo);
 
-      const sinceTs = since ? new Date(since).getTime() / 1000 : 0;
-      const untilTs = until
-        ? new Date(until).getTime() / 1000
-        : Date.now() / 1000;
+      const sinceTs = toUnixSeconds(since);
+      const untilTs = toUnixSeconds(until, Date.now() / 1000);
 
       const contributors = stats
         .map((s) => {
@@ -130,10 +129,8 @@ export function registerContributionTools(server: McpServer) {
 
       // Get contributor stats
       const contribStats = await fetchContributorStats(owner, repo);
-      const sinceTs = since ? new Date(since).getTime() / 1000 : 0;
-      const untilTs = until
-        ? new Date(until).getTime() / 1000
-        : Date.now() / 1000;
+      const sinceTs = toUnixSeconds(since);
+      const untilTs = toUnixSeconds(until, Date.now() / 1000);
 
       let totalAdditions = 0;
       let totalDeletions = 0;
@@ -229,10 +226,8 @@ export function registerContributionTools(server: McpServer) {
       // Check rate limit before expensive operation
       await ensureRateLimit("core", activeRepos.length * 2);
 
-      const sinceTs = since ? new Date(since).getTime() / 1000 : 0;
-      const untilTs = until
-        ? new Date(until).getTime() / 1000
-        : Date.now() / 1000;
+      const sinceTs = toUnixSeconds(since);
+      const untilTs = toUnixSeconds(until, Date.now() / 1000);
 
       // LOC from contributor stats (parallelized)
       const { results: locResults, errors } = await mapConcurrent(

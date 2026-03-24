@@ -5,6 +5,7 @@ import {
   PutCommand,
   DeleteCommand,
 } from "@aws-sdk/lib-dynamodb";
+import { encryptToken, decryptToken } from "../utils/crypto.js";
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
@@ -29,8 +30,8 @@ export async function saveUserToken(token: UserToken): Promise<void> {
       TableName: getTableName(),
       Item: {
         pk: `user#${token.githubUserId}`,
-        accessToken: token.accessToken,
-        refreshToken: token.refreshToken,
+        accessToken: encryptToken(token.accessToken),
+        refreshToken: encryptToken(token.refreshToken),
         expiresAt: token.expiresAt,
         ttl,
       },
@@ -50,8 +51,8 @@ export async function getUserToken(
   if (!result.Item) return null;
   return {
     githubUserId,
-    accessToken: result.Item.accessToken as string,
-    refreshToken: result.Item.refreshToken as string,
+    accessToken: decryptToken(result.Item.accessToken as string),
+    refreshToken: decryptToken(result.Item.refreshToken as string),
     expiresAt: result.Item.expiresAt as number,
   };
 }

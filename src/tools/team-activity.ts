@@ -8,6 +8,7 @@ import {
 } from "../github-client.js";
 import { githubSlug, isoDate } from "./schemas.js";
 import { mapConcurrent } from "../utils/concurrency.js";
+import { toUnixSeconds } from "../utils/dates.js";
 
 export function registerTeamActivityTools(server: McpServer) {
   server.registerTool(
@@ -77,10 +78,8 @@ export function registerTeamActivityTools(server: McpServer) {
 
       await ensureRateLimit("core", activeRepos.length * 2 + memberLogins.length * 2);
 
-      const sinceTs = since ? new Date(since).getTime() / 1000 : 0;
-      const untilTs = until
-        ? new Date(until).getTime() / 1000
-        : Date.now() / 1000;
+      const sinceTs = toUnixSeconds(since);
+      const untilTs = toUnixSeconds(until, Date.now() / 1000);
 
       // 3. Gather contributor stats per repo
       const memberSet = new Set(memberLogins.map((l) => l.toLowerCase()));
